@@ -1,0 +1,60 @@
+# Einmaliger Workflow: Windows Builder Image bauen und nach GHCR pushen.
+#
+# Zweck: Der Adesso GitLab Windows-Runner nutzt docker-windows Executor —
+#         kein Docker-in-Docker verfügbar. GitHub Actions stellt kostenlos
+#         Windows-Runner mit Docker bereit.
+#
+# Kein manuelles Secret nötig — GITHUB_TOKEN ist automatisch verfügbar.
+#
+# Manuell triggern:
+#   GitHub → Actions → "Build Windows Builder Image" → Run workflow
+#
+# Nach erfolgreichem Lauf liegt das Image unter:
+#   ghcr.io/jolle93/sop-windows-builder:latest
+#
+# Dann lokal:
+#   docker pull ghcr.io/jolle93/sop-windows-builder:latest
+#   docker tag  ghcr.io/jolle93/sop-windows-builder:latest \
+#               gitlab-registry.adesso-group.com/julian.paul/sop/windows-builder:latest
+#   docker login gitlab-registry.adesso-group.com -u Julian.Paul
+#   docker push gitlab-registry.adesso-group.com/julian.paul/sop/windows-builder:latest
+
+name: Build Windows Builder Image
+
+on:
+  workflow_dispatch:   # manuell triggerbar
+  push:
+    paths:
+      - docker/windows/Dockerfile
+
+jobs:
+  build-and-push:
+    runs-on: windows-latest   # Windows Server 2022 mit Docker
+    timeout-minutes: 90       # VS Build Tools braucht ~45-60 min
+
+    permissions:
+      packages: write   # für GHCR Push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | `
+            docker login ghcr.io -u jolle93 --password-stdin
+
+      - name: Build Windows Builder Image
+        run: |
+          docker build `
+            --tag ghcr.io/jolle93/sop-windows-builder:latest `
+            --file docker/windows/Dockerfile `
+            docker/windows/
+
+      - name: Push to GHCR
+        run: |
+          docker push ghcr.io/jolle93/sop-windows-builder:latest
+
+      - name: Logout
+        if: always()
+        run: docker logout ghcr.io
