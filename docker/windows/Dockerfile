@@ -6,8 +6,12 @@
 #   - GraalVM Community Edition 21 (native-image, java, javac)
 #   - Apache Maven 3.9.6
 #
-# escape=` damit Backslash in Windows-Pfaden nicht als Zeilenfortsetzung
+# escape=` damit Backslash in Windows-Pfaden nicht als Dockerfile-Escape
 # interpretiert wird. Zeilenfortsetzung in RUN-Blöcken via Backtick.
+#
+# WICHTIG: Keine doppelten Anführungszeichen in RUN-Blöcken verwenden —
+# sie kollidieren mit dem äußeren -Command-Argument des SHELL-Befehls.
+# String-Interpolation via Concatenation mit einfachen Quotes + $var.
 
 FROM mcr.microsoft.com/windows/servercore:ltsc2022
 
@@ -22,7 +26,6 @@ RUN Write-Host '--- Downloading VS Build Tools ---'; `
       -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' `
       -OutFile 'C:\vs_buildtools.exe' `
       -UseBasicParsing; `
-    `
     Write-Host '--- Starting VS Build Tools installer ---'; `
     $proc = Start-Process 'C:\vs_buildtools.exe' `
       -ArgumentList `
@@ -30,12 +33,10 @@ RUN Write-Host '--- Downloading VS Build Tools ---'; `
         '--add', 'Microsoft.VisualStudio.Workload.VCTools', `
         '--includeRecommended' `
       -PassThru -Wait; `
-    `
-    Write-Host "vs_buildtools.exe ExitCode: $($proc.ExitCode)"; `
+    Write-Host ('vs_buildtools.exe ExitCode: ' + $proc.ExitCode); `
     if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { `
-      throw "VS Build Tools installer failed with exit code $($proc.ExitCode)"; `
+      throw ('VS Build Tools installer failed with exit code ' + $proc.ExitCode); `
     } `
-    `
     Write-Host '--- Waiting for background installer processes ---'; `
     $timeout = 600; $elapsed = 0; $interval = 10; `
     do { `
@@ -44,7 +45,6 @@ RUN Write-Host '--- Downloading VS Build Tools ---'; `
       $running = Get-Process -Name 'Setup', 'vs_installer', 'VSIXInstaller' `
                    -ErrorAction SilentlyContinue; `
     } while ($running -and $elapsed -lt $timeout); `
-    `
     Write-Host '--- VS Build Tools install complete ---'; `
     Remove-Item 'C:\vs_buildtools.exe' -Force
 
@@ -53,10 +53,9 @@ RUN Write-Host '--- Downloading VS Build Tools ---'; `
 # ---------------------------------------------------------------------------
 ARG GRAALVM_VERSION=21.0.2
 
-RUN Write-Host "--- Downloading GraalVM CE $env:GRAALVM_VERSION ---"; `
-    $url = "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-$env:GRAALVM_VERSION/graalvm-community-jdk-$($env:GRAALVM_VERSION)_windows-x64_bin.zip"; `
+RUN Write-Host ('--- Downloading GraalVM CE ' + $env:GRAALVM_VERSION + ' ---'); `
+    $url = 'https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-' + $env:GRAALVM_VERSION + '/graalvm-community-jdk-' + $env:GRAALVM_VERSION + '_windows-x64_bin.zip'; `
     Invoke-WebRequest -Uri $url -OutFile 'C:\graalvm.zip' -UseBasicParsing; `
-    `
     Write-Host '--- Extracting GraalVM ---'; `
     Expand-Archive -Path 'C:\graalvm.zip' -DestinationPath 'C:\graalvm-tmp' -Force; `
     $extracted = (Get-ChildItem 'C:\graalvm-tmp' | Select-Object -First 1).FullName; `
@@ -69,14 +68,13 @@ RUN Write-Host "--- Downloading GraalVM CE $env:GRAALVM_VERSION ---"; `
 # ---------------------------------------------------------------------------
 ARG MAVEN_VERSION=3.9.6
 
-RUN Write-Host "--- Downloading Maven $env:MAVEN_VERSION ---"; `
-    $url = "https://archive.apache.org/dist/maven/maven-3/$env:MAVEN_VERSION/binaries/apache-maven-$($env:MAVEN_VERSION)-bin.zip"; `
+RUN Write-Host ('--- Downloading Maven ' + $env:MAVEN_VERSION + ' ---'); `
+    $url = 'https://archive.apache.org/dist/maven/maven-3/' + $env:MAVEN_VERSION + '/binaries/apache-maven-' + $env:MAVEN_VERSION + '-bin.zip'; `
     Invoke-WebRequest -Uri $url -OutFile 'C:\maven.zip' -UseBasicParsing; `
-    `
     Write-Host '--- Extracting Maven ---'; `
     Expand-Archive -Path 'C:\maven.zip' -DestinationPath 'C:\' -Force; `
     Remove-Item 'C:\maven.zip' -Force; `
-    Write-Host "--- Maven installed at C:\apache-maven-$env:MAVEN_VERSION ---"
+    Write-Host ('--- Maven installed at C:\apache-maven-' + $env:MAVEN_VERSION + ' ---')
 
 # ---------------------------------------------------------------------------
 # 4. Umgebungsvariablen dauerhaft im Machine-Scope setzen
@@ -88,22 +86,19 @@ RUN Write-Host '--- Configuring PATH ---'; `
       'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC', `
       'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC' `
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1; `
-    `
     if (-not $msvcBase) { `
       Get-ChildItem 'C:\Program Files*' -Recurse -Filter 'cl.exe' -ErrorAction SilentlyContinue | `
-        Select-Object -First 5 | ForEach-Object { Write-Host "Found cl.exe at: $($_.FullName)" }; `
+        Select-Object -First 5 | ForEach-Object { Write-Host ('Found cl.exe at: ' + $_.FullName) }; `
       throw 'MSVC directory not found - VS Build Tools installation may have failed'; `
     } `
-    `
     $msvcVer = (Get-ChildItem $msvcBase | Sort-Object Name -Descending | Select-Object -First 1).FullName; `
-    $clPath   = "$msvcVer\bin\Hostx64\x64"; `
-    Write-Host "cl.exe path: $clPath"; `
-    `
+    $clPath = $msvcVer + '\bin\Hostx64\x64'; `
+    Write-Host ('cl.exe path: ' + $clPath); `
     [System.Environment]::SetEnvironmentVariable('JAVA_HOME', 'C:\graalvm', 'Machine'); `
     $syspath = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine'); `
     [System.Environment]::SetEnvironmentVariable( `
       'PATH', `
-      "C:\graalvm\bin;C:\apache-maven-$env:MAVEN_VERSION\bin;$clPath;$syspath", `
+      'C:\graalvm\bin;C:\apache-maven-' + $env:MAVEN_VERSION + '\bin;' + $clPath + ';' + $syspath, `
       'Machine' `
     ); `
     Write-Host '--- Environment configured ---'
